@@ -45,12 +45,12 @@
 
 #define DATA_LENGTH                        512              /*!<Data buffer length for test buffer*/
 #define RW_TEST_LENGTH                     129              /*!<Data length for r/w test, any value from 0-DATA_LENGTH*/
-#define DELAY_TIME_BETWEEN_ITEMS_MS        1234             /*!< delay time between different test items */
+#define DELAY_TIME_BETWEEN_ITEMS_MS        500             /*!< delay time between different test items */
 
 //#define I2C_EXAMPLE_MASTER_SCL_IO          19               /*!< gpio number for I2C master clock */
 //#define I2C_EXAMPLE_MASTER_SDA_IO          18               /*!< gpio number for I2C master data  */
-#define I2C_EXAMPLE_MASTER_SCL_IO          22               /*!< gpio number for I2C master clock */
-#define I2C_EXAMPLE_MASTER_SDA_IO          21               /*!< gpio number for I2C master data  */
+#define I2C_EXAMPLE_MASTER_SCL_IO          26               /*!< gpio number for I2C master clock */
+#define I2C_EXAMPLE_MASTER_SDA_IO          25               /*!< gpio number for I2C master data  */
 #define I2C_EXAMPLE_MASTER_NUM             I2C_NUM_1        /*!< I2C port number for master dev */
 #define I2C_EXAMPLE_MASTER_TX_BUF_DISABLE  0                /*!< I2C master do not need buffer */
 #define I2C_EXAMPLE_MASTER_RX_BUF_DISABLE  0                /*!< I2C master do not need buffer */
@@ -66,7 +66,8 @@
 #define ACK_VAL                            0x0              /*!< I2C ack value */
 #define NACK_VAL                           0x1              /*!< I2C nack value */
 
-#define GY521_ADDR                 0x68             /*!< slave address for BH1750 sensor */
+#define GY521_ADDR                 0x68             /*!< slave address for GY521 sensor */
+//#define GY521_ADDR                 0xE8             /*!< slave address for GY521 sensor */
 //SemaphoreHandle_t print_mux = NULL;
 
 int	First = 1;
@@ -84,84 +85,67 @@ int	First = 1;
  * | start | slave_addr + rd_bit + ack | read 1 byte + ack  | read 1 byte + nack | stop |
  * --------|---------------------------|--------------------|--------------------|------|
  */
-static esp_err_t i2c_example_master_sensor_test(i2c_port_t i2c_num, uint16_t *accx, uint16_t *accy, uint16_t *accz, uint16_t *temp, uint16_t *gyrox, uint16_t*gyroy, uint16_t*gyroz)
+static esp_err_t i2c_example_master_sensor_test(i2c_port_t i2c_num, int16_t *accx, int16_t *accy, int16_t *accz, int16_t *temp, int16_t *gyrox, int16_t*gyroy, int16_t*gyroz)
 {
-	static int count = 0;
-    int ret;
-    uint8_t low=0x34, high=0x12, addr;
+	int ret;
+	uint8_t buf[7*2];
 
-    if (First)
-    {
-        printf("First=1: init ");
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
-//    i2c_master_write_byte(cmd, BH1750_CMD_START, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, GY521_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, 0x6B, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, 0, ACK_CHECK_EN);
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
-    i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-        First = 0;
-    }
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
-//    i2c_master_write_byte(cmd, BH1750_CMD_START, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, GY521_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
-    addr = 0x3B+(count%8);
-    count+=2;
-    i2c_master_write_byte(cmd, addr, ACK_CHECK_EN);
-    printf("addr=%02x\n", addr);
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
-    i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    vTaskDelay(30 / portTICK_RATE_MS);
-    cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
-    ret = i2c_master_write_byte(cmd, GY521_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
-    if (ret != ESP_OK)
-	    printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
-    ret = i2c_master_read_byte(cmd, &high, ACK_VAL);
-    if (ret != ESP_OK)
-	    printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
-    ret = i2c_master_read_byte(cmd, &low, NACK_VAL);
-    if (ret != ESP_OK)
-	    printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
-            printf("high=%02x low=%02x\n", high, low);
-    *accx = high<<8 | low;
-   /*
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, ACK_VAL);
-    *accy = high<<8 | low;
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, ACK_VAL);
-    *accz = high<<8 | low;
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, ACK_VAL);
-    *temp = high<<8 | low;
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, ACK_VAL);
-    *gyrox = high<<8 | low;
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, ACK_VAL);
-    *gyroy = high<<8 | low;
-    i2c_master_read_byte(cmd, &high, ACK_VAL);
-    i2c_master_read_byte(cmd, &low, NACK_VAL);
-    *gyroz = high<<8 | low;
-    */
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
-    i2c_cmd_link_delete(cmd);
-    return ret;
+	if (First)
+	{
+		printf("First=1: init ");
+		i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+		i2c_master_start(cmd);
+		//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
+		//    i2c_master_write_byte(cmd, BH1750_CMD_START, ACK_CHECK_EN);
+		i2c_master_write_byte(cmd, (GY521_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);
+		i2c_master_write_byte(cmd, 0x6B, ACK_CHECK_EN);
+		i2c_master_write_byte(cmd, 0, ACK_CHECK_EN);
+		i2c_master_stop(cmd);
+		ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+		i2c_cmd_link_delete(cmd);
+		if (ret != ESP_OK) {
+			return ret;
+		}
+		First = 0;
+	}
+	i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+	i2c_master_start(cmd);
+	//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
+	//    i2c_master_write_byte(cmd, BH1750_CMD_START, ACK_CHECK_EN);
+	i2c_master_write_byte(cmd, (GY521_ADDR << 1 )| WRITE_BIT, ACK_CHECK_EN);
+	i2c_master_write_byte(cmd, 0x3B, ACK_CHECK_EN);
+	i2c_master_stop(cmd);
+	ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+	i2c_cmd_link_delete(cmd);
+	if (ret != ESP_OK) {
+		return ret;
+	}
+	vTaskDelay(30 / portTICK_RATE_MS);
+	cmd = i2c_cmd_link_create();
+	i2c_master_start(cmd);
+	//    i2c_master_write_byte(cmd, BH1750_SENSOR_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
+	ret = i2c_master_write_byte(cmd, (GY521_ADDR << 1) | READ_BIT, ACK_CHECK_EN);
+	if (ret != ESP_OK)
+		printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
+//	ret = i2c_master_read_byte(cmd, &high, ACK_VAL);
+	ret = i2c_master_read(cmd, buf, sizeof(buf)-1, ACK_VAL);
+	if (ret != ESP_OK)
+		printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
+//	ret = i2c_master_read_byte(cmd, &low, NACK_VAL);
+	ret = i2c_master_read_byte(cmd, buf+sizeof(buf)-1, NACK_VAL);
+	if (ret != ESP_OK)
+		printf("%s:%d ret=%d\n", __FILE__, __LINE__, ret);
+	i2c_master_stop(cmd);
+	ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+	i2c_cmd_link_delete(cmd);
+	*accx = buf[0]<<8 | buf[1];
+	*accy = buf[2]<<8 | buf[3];
+	*accz = buf[4]<<8 | buf[5];
+	*temp = buf[6]<<8 | buf[7];
+	*gyrox = buf[8]<<8 | buf[9];
+	*gyroy = buf[10]<<8 | buf[11];
+	*gyroz = buf[12]<<8 | buf[13];
+	return ret;
 }
 
 /**
@@ -183,6 +167,7 @@ static void i2c_example_master_init()
                        I2C_EXAMPLE_MASTER_TX_BUF_DISABLE, 0);
 }
 
+#if 0
 /**
  * @brief test function to show buffer
  */
@@ -197,17 +182,14 @@ static void disp_buf(uint8_t* buf, int len)
     }
     printf("\n");
 }
+#endif
 
 static void i2c_test_task(void* arg)
 {
-    int i = 0;
+    static int16_t paccx=0, paccy=0, paccz=0, ptemp=0, pgyrox=0, pgyroy=0, pgyroz=0;
     int ret;
     uint32_t task_idx = (uint32_t) arg;
-    uint8_t* data = (uint8_t*) malloc(DATA_LENGTH);
-    uint8_t* data_wr = (uint8_t*) malloc(DATA_LENGTH);
-    uint8_t* data_rd = (uint8_t*) malloc(DATA_LENGTH);
-    uint8_t sensor_data_h, sensor_data_l;
-    uint16_t accx, accy, accz, temp, gyrox, gyroy, gyroz;
+    int16_t accx, accy, accz, temp, gyrox, gyroy, gyroz;
     int cnt = 0;
     while (1) {
         printf("test cnt: %d\n", cnt++);
@@ -220,13 +202,29 @@ static void i2c_test_task(void* arg)
             printf("*******************\n");
             printf("TASK[%d]  MASTER READ SENSOR( GY-521 )\n", task_idx);
             printf("*******************\n");
-            printf("accx: %04x\n", accx);
-            printf("accy: %04x\n", accy);
-            printf("accz: %04x\n", accz);
-            printf("temp: %04x\n", temp);
-            printf("gyrox: %04x\n", gyrox);
-            printf("gyroy: %04x\n", gyroy);
-            printf("gyroz: %04x\n", gyroz);
+#if 0
+            printf("accx: %d (%+d%%)\n", accx, 100*(accx-paccx)/(paccx?paccx:1));
+            printf("accy: %d (%+d%%)\n", accy, 100*(accy-paccy)/(paccy?paccy:1));
+            printf("accz: %d (%+d%%)\n", accz, 100*(accz-paccz)/(paccz?paccz:1));
+            printf("temp: %d (%+d%%)\n", temp, 100*(temp-ptemp)/(ptemp?ptemp:1));
+            printf("gyrox: %d (%+d%%)\n", gyrox, 100*(gyrox-pgyrox)/(pgyrox?pgyrox:1));
+            printf("gyroy: %d (%+d%%)\n", gyroy, 100*(gyroy-pgyroy)/(pgyroy?pgyroy:1));
+            printf("gyroz: %d (%+d%%)\n", gyroz, 100*(gyroz-pgyroz)/(pgyroz?pgyroz:1));
+#endif
+            printf("accx: %d (%+d)\n", accx, (accx-paccx));
+            printf("accy: %d (%+d)\n", accy, (accy-paccy));
+            printf("accz: %d (%+d)\n", accz, (accz-paccz));
+            printf("temp: %d (%+d)\n", temp, (temp-ptemp));
+            printf("gyrox: %d (%+d)\n", gyrox, (gyrox-pgyrox));
+            printf("gyroy: %d (%+d)\n", gyroy, (gyroy-pgyroy));
+            printf("gyroz: %d (%+d)\n", gyroz, (gyroz-pgyroz));
+	    paccx = accx;
+	    paccy = accy;
+	    paccz = accz;
+	    ptemp = temp;
+	    pgyrox = gyrox;
+	    pgyroy = gyroy;
+	    pgyroz = gyroz;
         } else {
             printf("%s: No ack, sensor not connected...skip...\n", esp_err_to_name(ret));
         }
