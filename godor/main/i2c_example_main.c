@@ -61,7 +61,6 @@
 #define	TCP_SERVER_PORT			3000
 
 static EventGroupHandle_t wifi_event_group;
-static EventGroupHandle_t tcpserver_event_group;
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
@@ -544,7 +543,7 @@ static void pca_task(void* arg)
 			printf("frequency = %u\n", freq);
 #endif
 
-		move();
+//		move();
 		vTaskDelay(500 / portTICK_PERIOD_MS);
 //		vTaskDelay(( DELAY_TIME_BETWEEN_ITEMS_MS * ( task_idx + 1 ) ) / portTICK_RATE_MS);
 	}
@@ -556,6 +555,18 @@ void app_main_old()
     xTaskCreate(i2c_test_task, "i2c_test_task_0", 1024 * 2, (void* ) 0, 10, NULL);
 //    xTaskCreate(i2c_test_task, "i2c_test_task_1", 1024 * 2, (void* ) 1, 10, NULL);
 
+}
+
+int treatCmd(char *buf)
+{
+	if (!buf || !*buf)
+		return 0;
+
+	printf("treatCmd(%s)\n", buf);
+	if (!strncmp(buf, "quit", 4))
+		return 1;
+
+	return 0;
 }
 
 //********************************
@@ -582,7 +593,7 @@ void tcp_server(void *pvParam)
 
 	//----- WAIT FOR ETHERNET CONNECTED -----
 	ESP_LOGI(TAG, "... waiting for ethernet connect \n");
-	xEventGroupWaitBits(tcpserver_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+	xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
 	while(1)
 	{
 		//----- ALLOCATE SOCKET -----
@@ -658,11 +669,17 @@ void tcp_server(void *pvParam)
 						putchar(recv_buf[i]);
 					ESP_LOGI(TAG,"Data receive complete");
 
+					if (treatCmd(recv_buf) == 1)
+					{
+						write(client_socket , "Good bye!" , strlen("Good bye!")); 
+						break;
+					}
+
 					//Clear the buffer for next time (not acutally needed but may as well)
 					bzero(recv_buf, sizeof(recv_buf));
 
 					//----- TRANSMIT -----
-					if (write(client_socket , "Hello!" , strlen("Hello!")) < 0)
+					if (write(client_socket , "Hello!\n" , strlen("Hello!\n")) < 0)
 					{
 						ESP_LOGE(TAG, "Transmit failed");
 						close(socket_id);

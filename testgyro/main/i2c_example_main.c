@@ -10,6 +10,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <stdio.h>
+#include <time.h>
 #include "driver/i2c.h"
 
 /**
@@ -226,7 +227,14 @@ static void i2c_test_task(void* arg)
 	    pgyroy = gyroy;
 	    pgyroz = gyroz;
         } else {
-            printf("%s: No ack, sensor not connected...skip...\n", esp_err_to_name(ret));
+		struct tm	*st;
+		time_t		now;
+
+            	printf("%s: No ack, sensor not connected...skip...\n", esp_err_to_name(ret));
+		now = time(NULL);
+		st = localtime(&now);
+		printf("%04d/%02d/%02d %02d:%02d:%02d\n", st->tm_year+1900, st->tm_mon+1, st->tm_mday,
+				st->tm_hour, st->tm_min, st->tm_sec);
         }
         vTaskDelay(( DELAY_TIME_BETWEEN_ITEMS_MS * ( task_idx + 1 ) ) / portTICK_RATE_MS);
     }
