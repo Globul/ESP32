@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+#
+#	MAKE flash	
+#	MAKE monitor (Ctrl+] to quit)
+#
+
+#sudo PATH="$PATH:/home/benoit/dvp/esp32env/xtensa-esp32-elf/bin" IDF_PATH="/home/benoit/dvp/esp32env/esp-idf" make $*
+export PATH="$PATH:/f/dvp/esp32env/msys32/opt/xtensa-esp32-elf/bin:/f/dvp/esp32env/msys32/mingw32/bin:/f/dvp/esp32env/msys32/usr/bin"
+export IDF_PATH="/f/dvp/esp32env/esp-idf"
+export MSYSTEM="MINGW32"
+echo "PATH=$PATH"
+make -j4 $*
