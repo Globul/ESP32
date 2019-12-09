@@ -10,8 +10,10 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <stdio.h>
+#include <ctype.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 //#include "driver/i2c.h"
 #include "tcp_server.h"
 #include "i2cdev.h"
@@ -152,8 +154,8 @@ int		First = 1;
 i2c_dev_t	Pca;		// PCA9685 that control the servos
 
 #define CHECK_LOOP(X, msg, ...) do { esp_err_t __; while((__ = X) != ESP_OK) { printf(msg "\n", ## __VA_ARGS__); vTaskDelay(250 / portTICK_PERIOD_MS); }} while (0)
-#define	SERVOMIN	400
-#define	SERVOMAX	1950
+#define	SERVOMIN	350
+#define	SERVOMAX	2000
 #define	SERVODIFF	(SERVOMAX-SERVOMIN)
 
 
@@ -183,8 +185,154 @@ i2c_dev_t	Pca;		// PCA9685 that control the servos
 #define	SERVOLEFTM	-1	// middle servo, rotation inverted=-1
 #define	SERVOLEFTH	1	// high servo, rotation inverted=-1
 
+typedef	uint8_t	position_t[12];
+
+typedef struct	movement_s {
+			position_t		*pos;
+			struct movement_s	*next;
+		} movement_t;
+
 uint16_t	LastPos[12];
-uint16_t	Calib[12*2];	// Calibration for 12 servos, min, max
+uint16_t	Calib[12*2] = {		// Calibration for 12 servos, min, max
+			420, 1530,	// FRONT RIGHT B, MIN, DIFF
+			450, 1400,	// FRONT RIGHT M, MIN, DIFF
+			700, 750,	// FRONT RIGHT H, MIN, DIFF
+			430, 1510,	// REAR RIGHT B, MIN, DIFF
+			500, 950,	// REAR RIGHT M, MIN, DIFF
+			1000, 750,	// REAR RIGHT H, MIN, DIFF
+			390, 1460,	// FRONT LEFT B, MIN, DIFF
+			400, 1300,	// FRONT LEFT M, MIN, DIFF
+			650, 750,	// FRONT LEFT H, MIN, DIFF
+			390, 1460,	// REAR LEFT B, MIN, DIFF
+			850, 900,	// REAR LEFT M, MIN, DIFF
+			700, 700,	// REAR LEFT H, MIN, DIFF
+		};
+
+uint8_t		ServoEnabled[12] = {
+       			1, 1, 1,	// FRONT RIGHT B M H
+		       	1, 1, 1,	// REAR RIGHT B M H
+		       	1, 1, 1,	// FRONT LEFT B M H
+			1, 1, 1		// REAR LEFT B M H
+		};
+
+position_t	PosDown = {
+       			0, 0, 0,	// FRONT RIGHT B M H
+		       	0, 0, 0,	// REAR RIGHT B M H
+		       	0, 0, 0,	// FRONT LEFT B M H
+			0, 0, 0		// REAR LEFT B M H
+		};
+
+position_t	PosUp = {
+       			70, 25, 20,	// FRONT RIGHT B M H
+		       	70, 25, 15,	// REAR RIGHT B M H
+		       	50, 30, 20,	// FRONT LEFT B M H
+			50, 30, 25	// REAR LEFT B M H
+		};
+
+position_t	PosCur = {
+       			0, 0, 0,	// FRONT RIGHT B M H
+		       	0, 0, 0,	// REAR RIGHT B M H
+		       	0, 0, 0,	// FRONT LEFT B M H
+			0, 0, 0		// REAR LEFT B M H
+		};
+
+position_t	PosTarg = {
+       			0, 0, 0,	// FRONT RIGHT B M H
+		       	0, 0, 0,	// REAR RIGHT B M H
+		       	0, 0, 0,	// FRONT LEFT B M H
+			0, 0, 0		// REAR LEFT B M H
+		};
+
+position_t	PosWalk1 = {
+       			50, 15, 20,	// FRONT RIGHT B M H
+		       	70, 25, 15,	// REAR RIGHT B M H
+		       	50, 30, 20,	// FRONT LEFT B M H
+			50, 30, 25	// REAR LEFT B M H
+		};
+
+position_t	PosWalk2 = {
+       			20, 15, 20,	// FRONT RIGHT B M H
+		       	70, 25, 15,	// REAR RIGHT B M H
+		       	50, 30, 20,	// FRONT LEFT B M H
+			50, 30, 25	// REAR LEFT B M H
+		};
+
+position_t	PosWalk3 = {
+       			70, 65, 20,	// FRONT RIGHT B M H
+		       	70, 25, 15,	// REAR RIGHT B M H
+		       	50, 30, 20,	// FRONT LEFT B M H
+			50, 30, 25	// REAR LEFT B M H
+		};
+
+position_t	PosWalk4 = {
+       			70, 25, 20,	// FRONT RIGHT B M H
+		       	70, 25, 15,	// REAR RIGHT B M H
+		       	50, 30, 20,	// FRONT LEFT B M H
+			50, 30, 25	// REAR LEFT B M H
+		};
+
+
+
+
+
+// calculate coordinate of the foot from servo positions, for right leg
+// p0: coordinates of head of high servo = (0,0,0)
+// p1: coordinates of head of medium servo
+// p2: coordinates of head of low servo
+// p3: coordinates of the foot
+int calcInv(int sh, int sm, int sl)
+{
+	int	angle;
+	int	shmin = 400;
+	int	shmax = 1950;
+	int	smmin = 400;
+	int	smmax = 1950;
+	int	slmin = 400;
+	int	slmax = 1950;
+	int	shdiff, smdiff, sldiff;
+	float	x0=0, x1, x2, x3;
+	float	y0=0, y1, y2, y3;
+	float	z0=0, z1, z2, z3;
+	// decalage pour positions sh: angle 90, sm: angle 0, sl: angle 0(inv)
+	int	decx1 = 18;
+	int	decy1 = 19;
+	int	decx2 = 10;
+	int	decy2 = 68;
+	int	decx3 = 5;
+	int	decy3 = 73;
+
+	shdiff = shmax-shmin;
+	angle = (sh-shmin)*180/shdiff;
+	x1 = x0 + decx1*sin(angle);
+	y1 = y0 + decy1;
+	z1 = z0 + decx1*cos(angle);
+
+	printf("sh: angle=%d x1=%.2f y1=%.2f z1=%.2f\n", angle, x1, y1, z1);
+
+	smdiff = smmax-smmin;
+	angle = (sm-smmin)*180/smdiff;
+	x2 = x1 + decx2;
+	y2 = y1 - decy2*cos(angle);
+	z2 = z1 - decy2*sin(angle);
+
+	printf("sm: angle=%d x2=%.2f y2=%.2f z2=%.2f\n", angle, x2, y2, z2);
+
+	sldiff = slmax-slmin;
+	// angle inverted: angle 0 = servo at max
+	angle = (sl-slmin)*180/sldiff;
+	x3 = x2 + decx3;
+	y3 = y2 + decy3*cos(angle);
+	z3 = z2 - decy3*sin(angle);
+
+	printf("sl: angle=%d x3=%.2f y3=%.2f z3=%.2f\n", angle, x3, y3, z3);
+	return 0;
+}
+
+int calc(float x, float y, float z)
+{
+
+	return 0;
+}
 
 /**
  * @brief test code to write esp-i2c-slave
@@ -358,6 +506,17 @@ void servoSet(uint8_t servo, uint16_t val)
 	uint16_t	safe;
 
 	printf("servoSet servo %d val %d\n", servo, val);
+	if (servo < 0 || servo > 11)
+	{
+		printf("servoSet bad servo id !\n");
+		return;
+	}
+
+	if (!ServoEnabled[servo])
+	{
+		printf("  => servo disabled\n");
+		return;
+	}
 
 	if (val < SERVOMIN)
 		safe = SERVOMIN;
@@ -408,9 +567,10 @@ void servoSet100(uint8_t servo, uint8_t val)
 	if (isServoInverted(servo) == -1)
 		cor = 100-cor;
 
-	cor = SERVOMIN+(float)cor*SERVODIFF/100;
+//	cor = SERVOMIN+(float)cor*SERVODIFF/100;
+	cor = Calib[servo*2]+(float)cor*Calib[servo*2+1]/100;
 
-	printf("cor = %d\n", cor);
+	printf("servoSet100 servo=%d val=%d cor=%d\n", servo, val, cor);
 	return servoSet(servo, cor);
 }
 
@@ -434,15 +594,126 @@ char *servoName(uint8_t servo)
 	return "???";
 }
 
-void initPos()
+void calibration()
+{
+	int	i, servo;
+	int	dir=0;
+	printf("calibration\n");
+	for(i=0; i<240; i++)
+	{
+		if (i%12==0)
+			dir = (dir+1)%2;
+		servo = i%12;
+		servoSet100(servo, 100*dir);
+		vTaskDelay(30 / portTICK_PERIOD_MS);
+	}
+
+#if 0
+	vTaskDelay(3000 / portTICK_PERIOD_MS);
+	for(i=0; i<240; i++)
+	{
+		if (i%12==0)
+			dir = (dir+1)%2;
+		servo = i%12;
+		servoSet100(servo, 100*dir);
+		vTaskDelay(30 / portTICK_PERIOD_MS);
+	}
+#endif
+}
+
+void initPosOld()
 {
 	int	i;
 	printf("initPos\n");
-	for(i=0; i<12; i++)
+	for(i=0; i<12; i+=3)
+	{
+		servoSet100(i, 0);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+	for(i=1; i<12; i+=3)
+	{
+		servoSet100(i, 0);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+	for(i=2; i<12; i+=3)
+	{
 		servoSet100(i, 10);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
 }
 
-void move()
+void initPosOld2()
+{
+	int	i;
+	printf("initPos\n");
+	for(i=0; i<12; i+=3)
+	{
+		servoSet100(i, 50);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+	for(i=1; i<12; i+=3)
+	{
+		servoSet100(i, 30);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+	for(i=2; i<12; i+=3)
+	{
+		servoSet100(i, 20);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
+}
+
+int checkPos()
+{
+	printf("checkPos\n");
+	if (memcmp(&PosTarg, &PosCur, sizeof(PosTarg)))
+		return 0;
+	return 1;
+}
+
+int changePos()
+{
+	int	i;
+
+	printf("changePos\n");
+	for (i=0; i<12; i++)
+	{
+		if (PosCur[i] == PosTarg[i])
+			continue;
+
+		if (PosCur[i] > PosTarg[i])
+			PosCur[i] -= 1;
+		else
+			PosCur[i] += 1;
+		printf("changePos servo %d\n", i);
+		servoSet100(i, PosCur[i]);
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+	}
+	return 0;
+}
+
+void setPos(position_t *p)
+{
+	if (!p)
+		return;
+
+	printf("setPos\n");
+	memcpy(&PosTarg, p, sizeof(PosTarg));
+
+	while (!checkPos())
+	{
+		changePos();
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+	}
+}
+
+void initPos()
+{
+	printf("initPos\n");
+	setPos(&PosDown);
+}
+
+void moveold()
 {
 	int	i, val;
 	static int cycle=0;
@@ -456,14 +727,82 @@ void move()
 	}
 	for(i=0; i<12; i++)
 	{
-		if (sign < 0)
-			val = 40 - (cycle % 30);
+		// don't move high servos
+		if (i%3 == 2)
+			continue;
+		if (i%3 == 0)
+			val = 30;
 		else
-			val = 10 + (cycle % 30);
+			val = 0;
+		if (sign < 0)
+			val += 30 - (cycle % 30);
+		else
+			val +=  (cycle % 30);
 		printf("set servo %d pos %d\n", i, val);
 		servoSet100(i, val);
+		vTaskDelay(200 / portTICK_PERIOD_MS);
 	}
 	cycle += 1;
+}
+
+void loopMove(movement_t **m)
+{
+	movement_t	*pm;
+
+	if (!m)
+		return;
+
+	pm=*m;
+	if (!pm)
+		return;
+
+	while (pm->next)
+		pm = pm->next;
+
+	pm->next = *m;
+}
+
+void addInMove(movement_t **m, position_t *p)
+{
+	movement_t	*pm, *pnew;
+
+	if (!m || !p)
+		return;
+
+	pnew = (movement_t *) malloc(sizeof(movement_t));
+	if (!pnew)
+		return;
+
+	pnew->next = NULL;
+	pnew->pos = p;
+
+	pm=*m;
+	if (!pm)
+	{
+		// first position
+		*m = pnew;
+		return;
+	}
+
+	while (pm->next)
+		pm = pm->next;
+
+	pm->next = pnew;
+}
+
+void move(movement_t *m)
+{
+	movement_t	*nm;
+
+	if (!m)
+		return;
+
+	nm = m;
+	while (nm)
+	{
+		setPos(nm->pos);
+		nm = nm->next;
+	}
 }
 
 void moveRun()
@@ -498,6 +837,7 @@ static void pca_task(void* arg)
 	uint16_t	freq=200;
 	uint16_t	val;
 	uint32_t task_idx = (uint32_t) arg;
+	movement_t	*m;
 
 	printf("pca_task start\n");
 	memset(&LastPos, 0, sizeof(LastPos));
@@ -520,9 +860,22 @@ static void pca_task(void* arg)
 	printf("Freq real %d\n", freq);
 	printf("pca_task: %s:%d\n", __FILE__, __LINE__);
 
+	vTaskDelay(5000 / portTICK_PERIOD_MS);
 	initPos();
 	vTaskDelay(5000 / portTICK_PERIOD_MS);
+//	calibration();
+//	vTaskDelay(500000 / portTICK_PERIOD_MS);
 
+	// Up/Down
+	// addInMove(&m, &PosDown);
+	// addInMove(&m, &PosUp);
+	addInMove(&m, &PosWalk1);
+	addInMove(&m, &PosWalk2);
+	addInMove(&m, &PosWalk3);
+	loopMove(&m);
+
+	setPos(&PosUp);
+	vTaskDelay(5000 / portTICK_PERIOD_MS);
 	val = SERVOMIN+(SERVOMAX-SERVOMIN)/2;
 	while (1)
 	{
@@ -543,8 +896,8 @@ static void pca_task(void* arg)
 			printf("frequency = %u\n", freq);
 #endif
 
-//		move();
-		vTaskDelay(500 / portTICK_PERIOD_MS);
+		move(m);
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
 //		vTaskDelay(( DELAY_TIME_BETWEEN_ITEMS_MS * ( task_idx + 1 ) ) / portTICK_RATE_MS);
 	}
 }
@@ -559,12 +912,44 @@ void app_main_old()
 
 int treatCmd(char *buf)
 {
+	char	*pt;
+
 	if (!buf || !*buf)
 		return 0;
 
 	printf("treatCmd(%s)\n", buf);
 	if (!strncmp(buf, "quit", 4))
 		return 1;
+	else if (!strncmp(buf, "servo100", 8))
+	{
+		int	id, val;
+
+		pt = buf;
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		id = atoi(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		val = atoi(pt);
+
+		servoSet100(id, val);
+	}
+	else if (!strncmp(buf, "servo", 5))
+	{
+		int	id, val;
+
+		pt = buf;
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		id = atoi(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		val = atoi(pt);
+
+		servoSet(id, val);
+	}
 
 	return 0;
 }
@@ -679,7 +1064,7 @@ void tcp_server(void *pvParam)
 					bzero(recv_buf, sizeof(recv_buf));
 
 					//----- TRANSMIT -----
-					if (write(client_socket , "Hello!\n" , strlen("Hello!\n")) < 0)
+					if (write(client_socket , "Ok\n" , strlen("Ok\n")) < 0)
 					{
 						ESP_LOGE(TAG, "Transmit failed");
 						close(socket_id);
@@ -776,325 +1161,3 @@ void app_main()
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#if 0
-#include <stdio.h>
-#include <string.h>
-#include <sys/fcntl.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
-#include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_err.h"
-#include "esp_event_loop.h"
-#include "freertos/event_groups.h"
-#include "esp_event.h"
-#include "esp_attr.h"
-#include "esp_log.h"
-#include "esp_eth.h"
-
-#include "rom/ets_sys.h"
-#include "rom/gpio.h"
-
-#include "soc/dport_reg.h"
-#include "soc/io_mux_reg.h"
-#include "soc/rtc_cntl_reg.h"
-#include "soc/gpio_reg.h"
-#include "soc/gpio_sig_map.h"
-
-#include "tcpip_adapter.h"
-#include "nvs_flash.h"
-#include "driver/gpio.h"
-
-#include "eth_phy/phy_lan8720.h"
-
-#include "lwip/err.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
-#include "lwip/netdb.h"
-#include "lwip/dns.h"
-
-#define DEFAULT_ETHERNET_PHY_CONFIG phy_lan8720_default_ethernet_config
-// #define PIN_PHY_POWER CONFIG_PHY_POWER_PIN				//not needed for our board configuration
-
-#define PIN_SMI_MDC   GPIO_NUM_23
-#define PIN_SMI_MDIO  GPIO_NUM_18
-
-#define	TCP_SERVER_PORT			3000
-
-
-
-//******************************************
-//******************************************
-//********** ETHERNET GPIO CONFIG **********
-//******************************************
-//******************************************
-static void ethernet_gpio_config_rmii(void)
-{
-    //RMII data pins are fixed:
-    //	TXD0 = GPIO19
-    //	TXD1 = GPIO22
-    //	TX_EN = GPIO21
-    //	RXD0 = GPIO25
-    //	RXD1 = GPIO26
-    //	CLK == GPIO0
-    phy_rmii_configure_data_interface_pins();
-    phy_rmii_smi_configure_pins(PIN_SMI_MDC, PIN_SMI_MDIO);
-}
-
-
-//*****************************************
-//*****************************************
-//********** ETHERNET INITIALISE **********
-//*****************************************
-//*****************************************
-void ethernet_initialise (void)
-{
-	esp_err_t ret = ESP_OK;
-	tcpip_adapter_init();
-	ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
-
-	eth_config_t config = DEFAULT_ETHERNET_PHY_CONFIG;
-
-	config.phy_addr = CONFIG_PHY_ADDRESS;				//Set the PHY address in configuration
-	config.gpio_config = ethernet_gpio_config_rmii;
-	config.tcpip_input = tcpip_adapter_eth_input;
-
-	ret = esp_eth_init(&config);
-
-	if(ret == ESP_OK)
-	{
-		esp_eth_enable();
-		tcpserver_event_group = xEventGroupCreate();
-		xTaskCreate(&tcp_server, "tcp_server", 4096, NULL, 5, NULL);
-	}
-}
-
-
-
-//***************************************
-//***************************************
-//********** ESP EVENT HANDLER **********
-//***************************************
-//***************************************
-//Call this at startup:
-//ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
-static esp_err_t event_handler(void *ctx, system_event_t *event)
-{
-	switch(event->event_id)
-	{
-	case SYSTEM_EVENT_ETH_CONNECTED:
-		//Ethernet phy link up
-		xEventGroupSetBits(tcpserver_event_group, CONNECTED_BIT);
-		break;
-
-	case SYSTEM_EVENT_ETH_DISCONNECTED:
-		//Ethernet phy link down
-		xEventGroupClearBits(tcpserver_event_group, CONNECTED_BIT);
-		break;
-
-	case SYSTEM_EVENT_ETH_GOT_IP:
-		//Ethernet got IP from connected AP
-
-		break;
-
-	default:
-		break;
-	}
-	return ESP_OK;
-}
-
-
-
-//********************************
-//********************************
-//********** TCP SERVER **********
-//********************************
-//********************************
-void tcp_server(void *pvParam)
-{
-	int socket_id;
-	int bytes_received;
-	char recv_buf[64];
-	int client_socket;
-
-	ESP_LOGI(EthernetLogTag,"tcp_server task started \n");
-	struct sockaddr_in tcpServerAddr;
-	tcpServerAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	tcpServerAddr.sin_family = AF_INET;
-	tcpServerAddr.sin_port = htons( TCP_SERVER_PORT );
-	static struct sockaddr_in remote_addr;
-	static unsigned int socklen;
-	socklen = sizeof(remote_addr);
-
-
-	//----- WAIT FOR ETHERNET CONNECTED -----
-	ESP_LOGI(EthernetLogTag, "... waiting for ethernet connect \n");
-	xEventGroupWaitBits(tcpserver_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
-	while(1)
-	{
-		//----- ALLOCATE SOCKET -----
-		socket_id = socket(AF_INET, SOCK_STREAM, 0);
-		if(socket_id < 0)
-		{
-			//Couldn't allocate socket
-			ESP_LOGE(EthernetLogTag, "... Failed to allocate socket.\n");
-			vTaskDelay(1000 / portTICK_PERIOD_MS);
-			continue;
-		}
-		ESP_LOGI(EthernetLogTag, "... allocated socket\n");
-
-		//----- BIND -----
-		if(bind(socket_id, (struct sockaddr *)&tcpServerAddr, sizeof(tcpServerAddr)) != 0)
-		{
-			ESP_LOGE(EthernetLogTag, "... socket bind failed errno=%d \n", errno);
-			close(socket_id);
-			vTaskDelay(4000 / portTICK_PERIOD_MS);
-			continue;
-		}
-		ESP_LOGI(EthernetLogTag, "... socket bind done \n");
-
-		//----- LISTEN -----
-		if(listen (socket_id, 2) != 0)
-		{
-			ESP_LOGE(EthernetLogTag, "... socket listen failed errno=%d \n", errno);
-			close(socket_id);
-			vTaskDelay(4000 / portTICK_PERIOD_MS);
-			continue;
-		}
-
-		while (1)
-		{
-			//Once the socket has been created it doesn't matter if the network connection is lost, the Ethernet cable is unplugged and then re-plugged in,
-			//this while loop will still continue to work the next time a client connects
-
-			//----- WAIT FOR A CLIENT CONNECTION -----
-			ESP_LOGI(EthernetLogTag,"Waiting for new client connection...");
-			client_socket = accept(socket_id,(struct sockaddr *)&remote_addr, &socklen);		//<<<< WE STALL HERE WAITING FOR CONNECTION
-
-			//----- A CLIENT HAS CONNECTED -----
-			ESP_LOGI(EthernetLogTag,"New client connection");
-
-			//Optionally set O_NONBLOCK
-			//If O_NONBLOCK is set then recv() will return, otherwise it will stall until data is received or the connection is lost.
-			//fcntl(client_socket,F_SETFL,O_NONBLOCK);
-
-			bzero(recv_buf, sizeof(recv_buf));
-			while (1)
-			{
-
-				bytes_received = recv(client_socket, recv_buf, sizeof(recv_buf)-1, 0);		//<<<< WE STALL HERE WAITING FOR BYTES RECEIVED
-				if (bytes_received == 0)
-				{
-					//----- CONNECTION LOST -----
-					//There is no client any more - must have disconnected
-					ESP_LOGI(EthernetLogTag,"Client connection lost");
-					break;
-				}
-				else if (bytes_received < 0)
-				{
-					//----- NO DATA WAITING -----
-					//We'll only get here if O_NONBLOCK was set
-
-					//vTaskDelay(50 / portTICK_PERIOD_MS);		//Release to RTOS scheduler
-				}
-				else
-				{
-					//----- DATA RECEIVED -----
-					ESP_LOGI(EthernetLogTag,"Data received:");
-					for(int i = 0; i < bytes_received; i++)
-						putchar(recv_buf[i]);
-					ESP_LOGI(EthernetLogTag,"Data receive complete");
-
-					//Clear the buffer for next time (not acutally needed but may as well)
-					bzero(recv_buf, sizeof(recv_buf));
-
-					//----- TRANSMIT -----
-					if (write(client_socket , "Hello!" , strlen("Hello!")) < 0)
-					{
-						ESP_LOGE(EthernetLogTag, "Transmit failed");
-						close(socket_id);
-						vTaskDelay(4000 / portTICK_PERIOD_MS);
-						continue;
-					}
-					ESP_LOGI(EthernetLogTag, "Transmit complete");
-				}
-			} //while (1)
-
-			//We won't actually get here, the while loop never exits (unless its implementation gets changed!)
-
-			//----- CLOSE THE SOCKET -----
-			ESP_LOGI(EthernetLogTag, "Closing socket");
-			close(client_socket);
-		}
-		ESP_LOGI(EthernetLogTag, "TCP server will be opened again in 3 secs...");
-		vTaskDelay(3000 / portTICK_PERIOD_MS);
-
-
-	}
-	ESP_LOGI(EthernetLogTag, "TCP client task closed\n");
-}
-
-
-static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
-{
-    switch(event->event_id) {
-    case SYSTEM_EVENT_STA_START:
-        esp_wifi_connect();
-        break;
-    case SYSTEM_EVENT_STA_GOT_IP:
-        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-        openssl_server_init();
-        break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-        /* This is a workaround as ESP32 WiFi libs don't currently
-           auto-reassociate. */
-        esp_wifi_connect(); 
-        xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
-        break;
-    default:
-        break;
-    }
-    return ESP_OK;
-}
-
-static void wifi_conn_init(void)
-{
-    tcpip_adapter_init();
-    wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK( esp_event_loop_init(wifi_event_handler, NULL) );
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = EXAMPLE_WIFI_SSID,
-            .password = EXAMPLE_WIFI_PASS,
-        },
-    };
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    ESP_LOGI(TAG, "start the WIFI SSID:[%s] password:[%s]\n", EXAMPLE_WIFI_SSID, EXAMPLE_WIFI_PASS);
-    ESP_ERROR_CHECK( esp_wifi_start() );
-}
-
-void app_main(void)
-{
-    ESP_ERROR_CHECK( nvs_flash_init() );
-    wifi_conn_init();
-}
-#endif
