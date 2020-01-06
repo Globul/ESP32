@@ -223,10 +223,10 @@ position_t	PosDown = {
 		};
 
 position_t	PosUp = {
-       			70, 25, 20,	// FRONT RIGHT B M H
-		       	70, 25, 15,	// REAR RIGHT B M H
-		       	50, 30, 20,	// FRONT LEFT B M H
-			50, 30, 25	// REAR LEFT B M H
+       			50, 5, 20,	// FRONT RIGHT B M H
+		       	50, 5, 15,	// REAR RIGHT B M H
+		       	30, 10, 20,	// FRONT LEFT B M H
+			30, 10, 25	// REAR LEFT B M H
 		};
 
 position_t	PosCur = {
@@ -663,6 +663,7 @@ void initPosOld2()
 	}
 }
 
+// check if current position has reached target position
 int checkPos()
 {
 	printf("checkPos\n");
@@ -671,6 +672,7 @@ int checkPos()
 	return 1;
 }
 
+// make a step on each servo to reach current target position
 int changePos()
 {
 	int	i;
@@ -692,6 +694,7 @@ int changePos()
 	return 0;
 }
 
+// move to position
 void setPos(position_t *p)
 {
 	if (!p)
@@ -707,6 +710,7 @@ void setPos(position_t *p)
 	}
 }
 
+// move to initial position
 void initPos()
 {
 	printf("initPos\n");
@@ -872,7 +876,7 @@ static void pca_task(void* arg)
 	addInMove(&m, &PosWalk1);
 	addInMove(&m, &PosWalk2);
 	addInMove(&m, &PosWalk3);
-	loopMove(&m);
+//	loopMove(&m);
 
 	setPos(&PosUp);
 	vTaskDelay(5000 / portTICK_PERIOD_MS);
@@ -896,7 +900,7 @@ static void pca_task(void* arg)
 			printf("frequency = %u\n", freq);
 #endif
 
-		move(m);
+//		move(m);
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
 //		vTaskDelay(( DELAY_TIME_BETWEEN_ITEMS_MS * ( task_idx + 1 ) ) / portTICK_RATE_MS);
 	}
@@ -910,6 +914,7 @@ void app_main_old()
 
 }
 
+// treat commands recieved
 int treatCmd(char *buf)
 {
 	char	*pt;
