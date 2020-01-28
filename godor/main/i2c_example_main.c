@@ -185,6 +185,21 @@ i2c_dev_t	Pca;		// PCA9685 that control the servos
 #define	SERVOLEFTM	-1	// middle servo, rotation inverted=-1
 #define	SERVOLEFTH	1	// high servo, rotation inverted=-1
 
+#define	LEGLEN		68	// leg length
+#define	FOOTLEN		73	// foot length
+
+typedef struct {
+	float	x;
+	float	y;
+	float	z;
+} coord_t;
+
+typedef struct {
+	float	ah;	// angle high servo
+	float	am;	// angle middle servo
+	float	ab;	// angle bottom servo
+} angles_t;
+
 typedef	uint8_t	position_t[12];
 
 typedef struct	movement_s {
@@ -206,6 +221,23 @@ uint16_t	Calib[12*2] = {		// Calibration for 12 servos, min, max
 			390, 1460,	// REAR LEFT B, MIN, DIFF
 			850, 900,	// REAR LEFT M, MIN, DIFF
 			700, 700,	// REAR LEFT H, MIN, DIFF
+		};
+
+uint16_t	CalibDegres[12*4] = {		// Calibration for 12 servos, min, max
+			1530, 45, 670, 140,	// FRONT RIGHT B, MIN, DIFF => 140°, 45°
+//			670, 140, 1530,	45,	// FRONT RIGHT B, MIN, DIFF => 140°, 45°
+			450, 10, 1500, 140,	// FRONT RIGHT M, MIN, DIFF => 10°, 140°
+			700, 0, 750, 0,		// FRONT RIGHT H, MIN, DIFF
+			430, 0, 1510, 0,	// REAR RIGHT B, MIN, DIFF
+			500, 0, 950, 0, 	// REAR RIGHT M, MIN, DIFF
+			1000, 0, 750, 0,	// REAR RIGHT H, MIN, DIFF
+			600, 45, 1460, 140,	// FRONT LEFT B, MIN, DIFF => 45°, 140°
+//			650, 140, 1700,	10,	// FRONT LEFT M, MIN, DIFF => 140°, 10°
+			1700, 10, 650, 140,	// FRONT LEFT M, MIN, DIFF => 140°, 10°
+			650, 0, 750, 0,		// FRONT LEFT H, MIN, DIFF
+			390, 0, 1460, 0,	// REAR LEFT B, MIN, DIFF
+			850, 0, 900, 0,		// REAR LEFT M, MIN, DIFF
+			700, 0, 700, 0,		// REAR LEFT H, MIN, DIFF
 		};
 
 uint8_t		ServoEnabled[12] = {
@@ -243,6 +275,27 @@ position_t	PosTarg = {
 			0, 0, 0		// REAR LEFT B M H
 		};
 
+position_t	PosDegWalk1 = {
+       			0, 50, 90,	// FRONT RIGHT B M H
+		       	0, 0, 90,	// REAR RIGHT B M H
+		       	0, 0, 90,	// FRONT LEFT B M H
+			0, 0, 90	// REAR LEFT B M H
+		};
+
+position_t	PosDegWalk2 = {
+       			0, -50, 90,	// FRONT RIGHT B M H
+		       	0, 0, 90,	// REAR RIGHT B M H
+		       	0, 0, 90,	// FRONT LEFT B M H
+			0, 0, 90	// REAR LEFT B M H
+		};
+
+position_t	PosDegWalk3 = {
+       			0, 0, 45,	// FRONT RIGHT B M H
+		       	0, 0, 90,	// REAR RIGHT B M H
+		       	0, 0, 90,	// FRONT LEFT B M H
+			0, 0, 90	// REAR LEFT B M H
+		};
+
 position_t	PosWalk1 = {
        			50, 15, 20,	// FRONT RIGHT B M H
 		       	70, 25, 15,	// REAR RIGHT B M H
@@ -274,6 +327,15 @@ position_t	PosWalk4 = {
 
 
 
+float Cos(float val)
+{
+	return cos(val*M_PI/180);
+}
+
+float Acos(float val)
+{
+	return acos(val)*180/M_PI;
+}
 
 // calculate coordinate of the foot from servo positions, for right leg
 // p0: coordinates of head of high servo = (0,0,0)
@@ -297,9 +359,9 @@ int calcInv(int sh, int sm, int sl)
 	int	decx1 = 18;
 	int	decy1 = 19;
 	int	decx2 = 10;
-	int	decy2 = 68;
+	int	decy2 = LEGLEN;
 	int	decx3 = 5;
-	int	decy3 = 73;
+	int	decy3 = FOOTLEN;
 
 	shdiff = shmax-shmin;
 	angle = (sh-shmin)*180/shdiff;
@@ -328,8 +390,27 @@ int calcInv(int sh, int sm, int sl)
 	return 0;
 }
 
-int calc(float x, float y, float z)
+// calculate servo angles (in degres) from foot contact coordinates
+int calc(coord_t *c, angles_t *a)
 {
+	float lc=LEGLEN, lp=FOOTLEN, lf;
+	float at, am, ab, adiff, aother;
+	float x, y, z;
+
+	x = c->x;
+	y = c->y;
+	z = c->z;
+
+	lf = sqrt(y*y+z*z);
+	ab = Acos((lc*lc+lp*lp-lf*lf)/(2*lc*lp));
+	adiff = Acos((lc*lc+lf*lf-lp*lp)/(2*lf*lc));
+	aother = Acos(y/lf);
+	am = 180 - adiff - aother;
+
+	printf("angle middle = %f angle bottom = %f\n", am, ab);
+
+	a->am = am;
+	a->ab = ab;
 
 	return 0;
 }
@@ -524,6 +605,70 @@ void servoSet(uint8_t servo, uint16_t val)
 		safe = SERVOMAX;
 	else
 		safe = val;
+
+	LastPos[servo] = safe;
+	if (pca9685_set_pwm_value(&Pca, servo, safe) != ESP_OK)
+		printf("Could not set PWM value %d to servo %d\n", safe, servo);
+	else
+		printf("PWM value %d set to servo %d\n", safe, servo);
+}
+
+void servoSetDegres(uint8_t servo, uint16_t val)
+{
+	uint16_t	safe;
+	uint16_t	vmin, vmax, amin, amax, sv;
+	float		p;
+
+	printf("servoSet servo %d val %d\n", servo, val);
+	if (servo < 0 || servo > 11)
+	{
+		printf("servoSet bad servo id !\n");
+		return;
+	}
+
+	if (!ServoEnabled[servo])
+	{
+		printf("  => servo disabled\n");
+		return;
+	}
+
+	if (CalibDegres[servo*4+1] < CalibDegres[servo*4+3] )
+	{
+		amin = CalibDegres[servo*4+1];
+		amax = CalibDegres[servo*4+3];
+	}
+	else
+	{
+		amin = CalibDegres[servo*4+3];
+		amax = CalibDegres[servo*4+1];
+	}
+
+	if (val < amin || val > amax)
+	{
+		printf("  angle %d out of range [%d, %d]\n", val, amin, amax);
+		return;
+	}
+
+	vmin = CalibDegres[servo*4+0];
+	vmax = CalibDegres[servo*4+2];
+
+	p = (float) (val - amin) / (amax - amin);
+
+	sv = p * (vmax - vmin) + vmin;
+	printf("SetDegres: angle=%d servo=%d => servo value = %d\n", val, servo, sv);
+
+	if (sv < SERVOMIN)
+	{
+		printf("Error: sv=%d < min=%d => use safe value\n", sv, SERVOMIN);
+		safe = SERVOMIN;
+	}
+	else if (sv > SERVOMAX)
+	{
+		printf("Error: sv=%d > max=%d => use safe value\n", sv, SERVOMAX);
+		safe = SERVOMAX;
+	}
+	else
+		safe = sv;
 
 	LastPos[servo] = safe;
 	if (pca9685_set_pwm_value(&Pca, servo, safe) != ESP_OK)
@@ -873,10 +1018,10 @@ static void pca_task(void* arg)
 	// Up/Down
 	// addInMove(&m, &PosDown);
 	// addInMove(&m, &PosUp);
-	addInMove(&m, &PosWalk1);
-	addInMove(&m, &PosWalk2);
-	addInMove(&m, &PosWalk3);
-//	loopMove(&m);
+	addInMove(&m, &PosDegWalk1);
+	addInMove(&m, &PosDegWalk2);
+	addInMove(&m, &PosDegWalk3);
+	loopMove(&m);
 
 	setPos(&PosUp);
 	vTaskDelay(5000 / portTICK_PERIOD_MS);
@@ -954,6 +1099,48 @@ int treatCmd(char *buf)
 		val = atoi(pt);
 
 		servoSet(id, val);
+	}
+	else if (!strncmp(buf, "sd", 2))	// servo in degres
+	{
+		int	id, val;
+
+		pt = buf;
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		id = atoi(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		val = atoi(pt);
+
+		servoSetDegres(id, val);
+	}
+	else if (!strncmp(buf, "co", 2))	// set foot coord
+	{
+		int		id;
+		coord_t		c;
+		angles_t	a;
+
+		pt = buf;
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		id = atoi(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		c.x = atof(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		c.y = atof(pt);
+
+		while (*pt && !isspace((int) *pt))	pt++;
+		while (*pt && isspace((int) *pt))	pt++;
+		c.z = atof(pt);
+
+		calc(&c, &a);
+		servoSetDegres(id*3, a.ab);
+		servoSetDegres(id*3+1, a.am);
 	}
 
 	return 0;
